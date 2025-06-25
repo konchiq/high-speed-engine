@@ -1,108 +1,237 @@
 from vpython import *
 import numpy as np
 
-# Константы
+# КОНСТАНТЫ И НАСТРОЙКИ
 c = 3e8  # Скорость света (м/с)
+FPS = 60
+SIMULATION_TIME = 100
+INITIAL_RANGE = 2.5e10  # Начальный масштаб сцены
 
+# НАСТРОЙКА СЦЕНЫ
+scene = canvas(
+    title='<title>Релятивистское движение</title>',
+    width=1920,
+    height=1080,
+    align='left'
+)
+scene.range = INITIAL_RANGE
+scene.forward = vector(-0.3, -0.2, -1)
+scene.autoscale = False
+
+scene.range = INITIAL_RANGE
+scene.forward = vector(-0.3, -0.2, -1)
+scene.autoscale = False
+
+# Коэффициент для масштабирования меток
+current_scale = 1.0
+
+
+def update_scale():
+    global current_scale
+    current_scale = scene.range / INITIAL_RANGE
+
+
+# ОБЪЕКТ С ПРИВЯЗАННОЙ МЕТКОЙ
+class LabeledObject:
+    def __init__(self, obj_type, m0, L0, pos, obj_color, label_offset_y, label_yoffset):
+        self.obj_type = obj_type
+        self.m0 = m0
+        self.L0 = L0
+        self.pos = pos
+        self.obj_color = obj_color
+        self.label_offset_y = label_offset_y
+        self.label_yoffset = label_yoffset
+
+        # Основной объект
+        self.obj = box(
+            pos=self.pos,
+            size=vector(L0, L0 / 10, L0 / 10),
+            color=self.obj_color,
+            make_trail=True,
+            trail_type="points",
+            interval=10,
+            retain=100
+        )
+
+        # Метка
+        self.label_pos = vector(pos.x, pos.y + label_offset_y, pos.z)
+        self.create_label()
+
+        # Соединительная линия
+        self.connector = curve(color=color.white, radius=1e7)
+        self.update_connector()
+
+    def create_label(self):
+        if self.obj_type == 'relativistic':
+            # Начальные значения для релятивистского объекта
+            gamma = 1.0
+            p = self.m0 * 0 * gamma
+            E_kin = 0
+            text = (f"Релятивистский объект\n"
+                    f"L = {self.L0:.2e} м\n"
+                    f"γ = {gamma:.2f}\n"
+                    f"p = {p:.2e} кг·м/с\n"
+                    f"E_kin = {E_kin:.2e} Дж")
+        else:
+            # Начальные значения для классического объекта
+            p = self.m0 * 0
+            E_kin = 0
+            text = (f"Классический объект\n"
+                    f"L = {self.L0:.2e} м\n"
+                    f"p = {p:.2e} кг·м/с\n"
+                    f"E_kin = {E_kin:.2e} Дж")
+
+        self.label = label(
+            pos=self.label_pos,
+            text=text,
+            xoffset=20,
+            yoffset=self.label_yoffset,
+            height=16,
+            border=4,
+            font='sans',
+            box=True
+        )
+
+    def update_connector(self):
+        # Обновление соединительной линии
+        self.connector.clear()
+        if self.label_yoffset > 0:  # Метка снизу
+            self.connector.append(
+                self.label_pos + vec(0, 40, 0),
+                vec(self.obj.pos.x, self.obj.pos.y - self.obj.size.y / 2, 0)
+            )
+        else:  # Метка сверху
+            self.connector.append(
+                self.label_pos + vec(0, -40, 0),
+                vec(self.obj.pos.x, self.obj.pos.y + self.obj.size.y / 2, 0)
+            )
+
+    def update(self, velocity, t):
+        # Обновление позиции объекта
+        self.obj.pos.x = velocity * t
+
+        # Обновление позиции метки (сохранение вертикального смещения)
+        self.label_pos.x = velocity * t
+        self.label.pos = self.label_pos
+
+        # Обновление соединительной линии
+        self.update_connector()
+
+        # Обновление параметров в зависимости от типа объекта
+        if self.obj_type == 'relativistic':
+            v_fraction = velocity / c
+            gamma = 1 / np.sqrt(1 - v_fraction ** 2)
+            p = self.m0 * velocity * gamma  # Релятивистский импульс
+            E_kin = (gamma - 1) * self.m0 * c ** 2  # Релятивистская кинетическая энергия
+
+            self.obj.length = self.L0 * np.sqrt(1 - v_fraction ** 2)
+            self.label.text = (f"Релятивистский объект\n"
+                               f"L = {self.L0 * np.sqrt(1 - v_fraction ** 2):.2e} м\n"
+                               f"γ = {gamma:.2f}\n"
+                               f"p = {p:.2e} кг·м/с\n"
+                               f"Eк = {E_kin:.2e} Дж")
+        else:
+            # Классические формулы для импульса и энергии
+            p = self.m0 * velocity
+            E_kin = 0.5 * self.m0 * velocity ** 2
+            self.label.text = (f"Классический объект\n"
+                               f"L = {self.L0:.2e} м\n"
+                               f"p = {p:.2e} кг·м/с\n"
+                               f"Eк = {E_kin:.2e} Дж")
+
+
+# ИНТЕРАКТИВНОЕ УПРАВЛЕНИЕ
+def setup_controls(velocity_handler):
+    # Создание элементов управления под сценой
+    scene.append_to_caption("\n\nСкорость (доля от c): ")
+    speed_slider = slider(min=0.01, max=0.99, value=0.5, length=600,
+                          bind=lambda s: velocity_handler(s.value))
+
+    scene.append_to_caption("\n\n")
+    button(bind=lambda: set_v(0.1, speed_slider, velocity_handler), text="10% c")
+    button(bind=lambda: set_v(0.3, speed_slider, velocity_handler), text="30% c")
+    button(bind=lambda: set_v(0.5, speed_slider, velocity_handler), text="50% c")
+    button(bind=lambda: set_v(0.7, speed_slider, velocity_handler), text="70% c")
+    button(bind=lambda: set_v(0.9, speed_slider, velocity_handler), text="90% c")
+    button(bind=lambda: set_v(0.99, speed_slider, velocity_handler), text="99% c")
+
+
+def set_v(v, slider, handler):
+    slider.value = v
+    handler(v)
+
+
+# ОСНОВНАЯ ПРОГРАММА
 # Ввод параметров
-m0 = float(input("Введите массу покоя объекта (кг): "))
-L0 = float(input("Введите длину объекта (м): "))
-v_fraction = float(input("Введите скорость объекта (доля от c, 0 < v < 1): "))
+print("Введите параметры симуляции (или нажмите Enter для значений по умолчанию):")
+try:
+    m0 = float(input("Масса покоя объекта (кг): ") or 100000)
+    L0 = float(input("Длина объекта (м): ") or 1e10)
+    v0 = float(input("Начальная скорость (доля от c): ") or 0.5)
+except ValueError:
+    print("Ошибка ввода, используются значения по умолчанию")
+    m0, L0, v0 = 100000, 1e10, 0.5
 
-if not 0 < v_fraction < 1:
-    raise ValueError("Скорость должна быть в интервале (0, 1)")
-
-# Релятивистские параметры
-gamma = 1 / np.sqrt(1 - v_fraction ** 2)
-v = v_fraction * c
-contracted_length = L0 * np.sqrt(1 - v_fraction ** 2)
-
-# Настройка сцены
-scene = canvas(title='Релятивистское движение', width=1200, height=800)
-scene.range = 2e10
-scene.forward = vector(-0.5, -0.5, -1)
-
-# Создание осей координат
-axis_x = cylinder(pos=vec(-1e11, 0, 0), axis=vec(2e11, 0, 0), radius=3e6, color=color.white)
-axis_y = cylinder(pos=vec(0, -1e11, 0), axis=vec(0, 2e11, 0), radius=3e6, color=color.white)
-axis_z = cylinder(pos=vec(0, 0, -1e11), axis=vec(0, 0, 2e11), radius=3e6, color=color.white)
+# Координатные оси
+axis_x = cylinder(pos=vec(-1.5e11, 0, 0), axis=vec(3e11, 0, 0), radius=5e6, color=color.white)
+axis_y = cylinder(pos=vec(0, -1.5e11, 0), axis=vec(0, 3e11, 0), radius=5e6, color=color.white)
 
 # Создание объектов
-relativistic_obj = box(pos=vector(0, 0, 0),
-                       size=vector(contracted_length, L0 / 10, L0 / 10),
-                       color=color.red,
-                       make_trail=True,
-                       trail_type="points",
-                       interval=50,
-                       retain=100)
+rel_obj = LabeledObject('relativistic', m0, L0, vector(0, 0, 0), color.red, -L0 - 2e9, 80)
+cls_obj = LabeledObject('classical', m0, L0, vector(0, L0, 0), color.blue, L0 + 2e9, -80)
 
-classical_obj = box(pos=vector(0, L0, 0),
-                    size=vector(L0, L0 / 10, L0 / 10),
-                    color=color.blue,
-                    make_trail=True,
-                    trail_type="points",
-                    interval=50,
-                    retain=100)
+# Текущая скорость
+current_velocity = v0 * c
+current_v_fraction = v0
 
 
-# Метки только с длиной (без скорости)
-rel_label = label(pos=relativistic_obj.pos + vector(0, L0/2 + 1e9, 0),
-                 text='Релятивистский объект\n' + f'L = {contracted_length:.2e} м',  # Только длина
-                 xoffset=20,
-                 yoffset=-60,
-                 height=14,
-                 border=3,
-                 font='sans')
+def handle_velocity_change(v_fraction):
+    global current_velocity, current_v_fraction
+    current_velocity = v_fraction * c
+    current_v_fraction = v_fraction
 
-cls_label = label(pos=classical_obj.pos + vector(0, -L0/2 - 1e9, 0),
-                 text='Классический объект\n' + f'L = {float(L0):.2e} м',  # Только длина
-                 xoffset=20,
-                 yoffset=40,
-                 height=14,
-                 border=3,
-                 font='sans')
 
-time_label = label(pos=vector(0, -2e10, 0),
-                   text=f"Лаб. время: 0 с\nСобств. время: 0 с\nv = {v_fraction:.2f}c", # Скорость
-                   height=24,
-                   border=6,
-                   font='sans')
+# Настройка элементов управления
+setup_controls(handle_velocity_change)
 
-# Параметры анимации
-dt = 0.1  # Шаг времени (с)
-t_lab = 0  # Лабораторное время
+# Метка времени
+time_label = label(
+    pos=vector(0, -2.2e10, 0),
+    text=f"Лаб. время: 0.0 с\nСобств. время: 0.0 с\nv = {current_v_fraction:.2f}c\nm = {m0:.2f} кг",
+    height=24,
+    border=6,
+    font='sans',
+    color=color.white,
+    box=True
+)
 
-# Запуск анимации
-while t_lab < 100:
-    rate(10)  # Ограничение частоты обновления
+# Главный цикл анимации
+t_lab = 0
+while t_lab < SIMULATION_TIME:
+    rate(FPS)
 
-    # Обновление положения релятивистского объекта
-    relativistic_obj.pos.x = v * t_lab
-    rel_label.pos = relativistic_obj.pos
+    # Обновление масштаба
+    update_scale()
 
-    # Обновление положения классического объекта
-    classical_obj.pos.x = v * t_lab
-    classical_obj.pos.y = L0  # Поддерживаем вертикальное смещение
-    cls_label.pos = classical_obj.pos
+    # Обновление объектов
+    rel_obj.update(current_velocity, t_lab)
+    cls_obj.update(current_velocity, t_lab)
 
-    # Расчет собственного времени
+    # Обновление информации в нижней метке
+    gamma = 1 / np.sqrt(1 - (current_velocity / c) ** 2)
     t_obj = t_lab / gamma
-
-    # Обновление меток
     time_label.text = (f"Лаб. время: {t_lab:.1f} с\n"
                        f"Собств. время: {t_obj:.1f} с\n"
-                       f"v = {v_fraction:.2f}c")
+                       f"v = {current_v_fraction:.2f}c\n"
+                       f"m = {m0:.2f} кг")
 
-    # Обновление формы релятивистского объекта
-    relativistic_obj.length = contracted_length
-    relativistic_obj.height = L0 / 10 * (1 + 0.5 * v_fraction ** 2)  # Визуальный эффект
-    relativistic_obj.width = L0 / 10 * (1 + 0.5 * v_fraction ** 2)
+    t_lab += 1 / FPS
 
-    t_lab += dt
-
-# Вывод релятивистских параметров в консоль
-print("\nРелятивистские эффекты:")
-print(f"1. Гамма-фактор: {gamma:.2f}")
-print(f"2. Релятивистская масса: {m0 * gamma:.2f} кг")
-print(f"3. Сокращение длины: {contracted_length:.2f} м")
-print(f"4. Замедление времени: 1 сек лаборатории = {1 / gamma:.2f} сек для объекта")
+print("\nСимуляция завершена!")
+print("Финальные параметры:")
+gamma = 1 / np.sqrt(1 - current_v_fraction ** 2)
+print(f"• Гамма-фактор: {gamma:.2f}")
+print(f"• Релятивистский импульс: {m0 * current_velocity * gamma:.2e} кг·м/с")
+print(f"• Кинетическая энергия: {m0 * c ** 2 * (gamma - 1):.2e} Дж")
+print(f"• Сокращение длины: {L0 / gamma:.2e} м (изначально {L0:.2e} м)")
+print(f"• Замедление времени: 1 сек лаборатории = {1 / gamma:.3f} сек для объекта")
